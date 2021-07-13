@@ -1,0 +1,97 @@
+---
+title: "treament_effect_estimation using iptw"
+author: "Gaukhar Nurbek"
+date: "5/4/2020"
+output: html_document
+---
+
+#### Linear regression model functinon 
+
+```{r}
+GLR = function(x,y,weights){
+one = rep(1,length(y))
+weight = sqrt(weights)
+x = x*weight
+y = y*weight
+X = cbind(one,x)
+b = solve(t(X) %*% X) %*% t(X) %*% y
+J = matrix(rep(1,length(y)*length(y)),ncol = length(y),nrow = length(y))
+SSTO = t(y) %*% y - 1/(length(y)) * t(y) %*% J %*% y 
+SSE = t(y) %*% y - t(b) %*% t(X) %*% y
+SSR = t(b) %*% t(X) %*% y - ((1/length(y))*t(y)) %*% J %*% y
+MSR = SSR/(length(b) - 1)
+MSE = SSE/(length(y) - length(b))
+F_S = MSR/MSE
+R_S = SSR/SSTO
+res = y - X%*%b
+predicted = X%*%b
+residual_st_error = sqrt(sum(res^2)/(length(y) - length(b)))
+resid_results = summary(res)
+b_hat = solve(t(X) %*% X) 
+SE = sqrt(diag(b_hat))*residual_st_error
+tb1 = b/SE
+pvalue1 = 2 - 2*pt(abs(tb1), df = length(y)- length(b))
+coefficient_results = cbind(b=b,SE=SE,tb1=tb1,pvalue1=pvalue1)
+p_value_F = pf(F_S, length(b) - 1, length(y) - length(b), lower.tail = FALSE)
+newList = list("coefficients" = coefficient_results, "residuals" = resid_results ,df = length(y) - length(b),"residiuals standard error" = residual_st_error, "F*" = F_S, "R^2" = R_S, "p_value" = p_value_F)
+return(list(newList=newList,res=res,predicted=predicted))
+}
+```
+
+#### IPTW calculator function 
+
+```{r}
+library(dplyr)
+IPTW = function(treatment,output,covs,data)
+{
+#ps and iptw estimation
+  ps  = data  %>% 
+  group_by_(covs) %>% 
+  summarise(ps = n()/sum(data[treatment]))
+
+data_ps  = data %>%
+  #this merges the propensity score into the bigger dataset by levels of the confounder
+  left_join(ps, by = c(covs)) %>%
+  #if exposed, assign the propensity score. if unexposed assign 1-the propensity score.
+  mutate(ps_received = case_when(
+    data[treatment]==1 ~ ps,
+    data[treatment]==0 ~ 1-ps)) %>%
+  #and the weights (for IPTW) are 1 over the ps_received
+  mutate(IPTW = unlist(data[treatment]/ps_received + 1-data[treatment]/(1-ps_received)))
+
+return(data_ps)
+}
+```
+#### Simulation 
+#### Upload data prepare it before use and apply it to a created function
+
+```{r}
+new_df = read.table("/Users/gokha/Desktop/stp2020/iptwGaukharNurbek/movie_data.csv", header=TRUE,
+   sep=",")
+
+new_df$weekend = ifelse(new_df$Day > 5, 1, 0)
+head(new_df)
+```
+
+
+#### Calculate iptw balance weight using iptw and calculate estimation effect using linear regression
+
+```{r}
+iptw_data = IPTW('weekend','GrossRevenue','Film',new_df)
+outDatWeight = data.frame(outcome = iptw_data$GrossRevenue, treatment = iptw_data$weekend, wt = iptw_data$IPTW)
+x = outDatWeight$treatment
+y = outDatWeight$outcome
+w = outDatWeight$wt
+head(iptw_data)
+fit = GLR(x, y, w)
+fit$newList$coefficients
+```
+
+#### Propensity scores plotting
+
+```{r}
+boxplot(ps~weekend,col = c(rgb(0.1,0.1,0.7,0.5) , rgb(0.8,0.1,0.3,0.6)),data=iptw_data, main="Propensity score",
+   xlab="Propensity score", ylab="Treatment",horizontal=TRUE)
+```
+
+
